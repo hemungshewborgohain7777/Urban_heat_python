@@ -249,104 +249,61 @@ st.markdown('<hr class="divider">', unsafe_allow_html=True)
 
 
 # ════════════════════════════════════════════════════════════
-# SECTION 2 — BUILDING FOOTPRINTS
+# SECTION 2 — BUILDING FOOTPRINTS (FIXED)
 # ════════════════════════════════════════════════════════════
-st.markdown('<div class="section-label">02 / Building Footprints</div>', unsafe_allow_html=True)
-st.markdown("### OpenStreetMap Urban Buildings via Geofabrik")
 
-st.markdown("""
-<div class="section-card">
-Building footprint data from OpenStreetMap (via Geofabrik) is clipped to the Area of Interest.
-This identifies built-up areas that contribute to elevated Land Surface Temperature.
-</div>
-""", unsafe_allow_html=True)
+st.markdown('<div class="section-label">02 / Building Footprints</div>', unsafe_allow_html=True)
+st.markdown("### OpenStreetMap Urban Buildings (Pre-Clipped)")
 
 with st.spinner("Loading building footprints…"):
     try:
         import geopandas as gpd
         import fiona
 
-        # ── Debug: check file exists ──
+        # Ensure file exists
         if not os.path.exists(Urban_Buildings):
-            st.error(f"File not found: {Urban_Buildings}")
+            st.error(f"GPKG not found: {Urban_Buildings}")
             st.stop()
 
-        # ── Detect available layers ──
+        # Detect layer
         layers = fiona.listlayers(Urban_Buildings)
-        st.write("Available layers:", layers)
-
-        # ── Use first layer automatically ──
         layer_name = layers[0]
 
-        urban = gpd.read_file(Urban_Buildings, layer=layer_name)
+        # Load directly (NO bbox, NO clipping)
+        urban_clipped = gpd.read_file(Urban_Buildings, layer=layer_name)
 
-        # ── CRS alignment ──
-        urban = urban.to_crs(gdf.crs)
+        # Fix CRS if missing/mismatch
+        if urban_clipped.crs != gdf.crs:
+            urban_clipped = urban_clipped.to_crs(gdf.crs)
 
-        # ── Only clip if needed ──
-        if len(urban) > 0:
-            urban_clipped = gpd.clip(urban, gdf)
-        else:
-            urban_clipped = urban
+        # Store globally for later use
+        st.session_state["urban_clipped"] = urban_clipped
 
-        # ── Stats ──
-        col1, col2, col3 = st.columns(3)
+        # Stats
+        col1, col2 = st.columns(2)
         with col1:
-            st.markdown(f'<div class="stat-box"><div class="stat-num">{len(urban):,}</div><div class="stat-label">Loaded features</div></div>', unsafe_allow_html=True)
+            st.metric("Total Buildings", f"{len(urban_clipped):,}")
         with col2:
-            st.markdown(f'<div class="stat-box"><div class="stat-num">{len(urban_clipped):,}</div><div class="stat-label">After clip</div></div>', unsafe_allow_html=True)
-        with col3:
-            st.markdown(f'<div class="stat-box"><div class="stat-num">{len(urban_clipped.columns)}</div><div class="stat-label">Attributes</div></div>', unsafe_allow_html=True)
+            st.metric("Attributes", len(urban_clipped.columns))
 
-        st.markdown("<br>", unsafe_allow_html=True)
+        # Plot
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(figsize=(10, 10))
+        fig.patch.set_facecolor('#0d0d0d')
+        ax.set_facecolor('#0d0d0d')
 
-        # ── Plot ──
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            import matplotlib.pyplot as plt
+        urban_clipped.plot(ax=ax, color='#ff6b35', linewidth=0.2)
+        gdf.plot(ax=ax, edgecolor='#f7c59f', facecolor='none', linewidth=1.5)
 
-            fig, ax = plt.subplots(figsize=(10, 13))
-            fig.patch.set_facecolor('#0d0d0d')
-            ax.set_facecolor('#0d0d0d')
+        ax.set_title("Urban Buildings — Kamrup Metro", color='white')
+        ax.axis('off')
 
-            urban_clipped.plot(edgecolor='#ff6b35', facecolor='#ff6b3522', linewidth=0.5, ax=ax)
-            gdf.plot(edgecolor='#f7c59f', color='none', linewidth=1.5, ax=ax)
-
-            ax.set_title("Urban Building Footprints — Kamrup Metro",
-                         fontsize=12, color='#e8e0d4', fontfamily='monospace', pad=12)
-
-            ax.tick_params(colors='#444')
-            for spine in ax.spines.values():
-                spine.set_edgecolor('#222')
-
-            st.pyplot(fig)
-            plt.close()
-
-        with col2:
-            st.markdown("**Feature Classes**")
-
-            col_name = None
-            if 'building' in urban_clipped.columns:
-                col_name = 'building'
-            elif 'type' in urban_clipped.columns:
-                col_name = 'type'
-
-            if col_name:
-                counts = urban_clipped[col_name].value_counts().head(10)
-                st.dataframe(
-                    counts.reset_index().rename(columns={'index': col_name, col_name: 'Count'}),
-                    use_container_width=True, hide_index=True
-                )
-
-        # ── Interactive Map ──
-        st.markdown("**Interactive Buildings Map**")
-        m = gdf.explore(color='#f7c59f', style_kwds={"fillOpacity": 0})
-        urban_clipped.explore(m=m, color="#ff6b35")
-        st.components.v1.html(m._repr_html_(), height=450)
+        st.pyplot(fig)
+        plt.close()
 
     except Exception as e:
         st.error(f"Building data error: {e}")
-
+        st.stop()
 
 # ════════════════════════════════════════════════════════════
 # SECTION 3 — MODIS LST RASTER
@@ -419,27 +376,46 @@ with st.spinner("Rendering leafmap…"):
     try:
         import leafmap.foliumap as leafmap
 
+        # ── Initialize map ──
         m = leafmap.Map(center=[26.15, 91.75], zoom=11)
         m.add_basemap("CartoDB.DarkMatter")
 
-        m.add_raster(MODIS_raster, layer_name="LST MODIS", colormap="coolwarm")
+        # ── Add raster (safe) ──
+        if os.path.exists(MODIS_raster):
+            m.add_raster(MODIS_raster, layer_name="LST MODIS", colormap="coolwarm")
+        else:
+            st.warning("MODIS raster not found, skipping raster layer.")
 
-        m.add_gdf(gdf, layer_name="Kamrup Boundary",
-                  style={"color": "#f7c59f", "weight": 2, "fillOpacity": 0})
+        # ── Add boundary (safe) ──
+        if 'gdf' in locals():
+            m.add_gdf(
+                gdf,
+                layer_name="Kamrup Boundary",
+                style={"color": "#f7c59f", "weight": 2, "fillOpacity": 0}
+            )
+        else:
+            st.warning("Boundary data not loaded.")
 
-        m.add_gdf(urban_clipped, layer_name="Urban Areas",
-                  style={"color": "#ff6b35", "fillOpacity": 0.3})
+        # ── Add buildings (SAFE FIX) ──
+        if 'urban_clipped' in locals() and not urban_clipped.empty:
+            m.add_gdf(
+                urban_clipped,
+                layer_name="Urban Areas",
+                style={"color": "#ff6b35", "fillOpacity": 0.3}
+            )
+        else:
+            st.warning("Urban building layer not available or empty.")
 
+        # ── Controls ──
         m.add_layer_control()
 
+        # ── Render ──
         st.components.v1.html(m.to_html(), height=520)
 
     except Exception as e:
-        st.warning(f"Leafmap render issue: {e}")
+        st.error(f"Leafmap render failed: {e}")
 
 st.markdown('<hr class="divider">', unsafe_allow_html=True)
-
-
 # ════════════════════════════════════════════════════════════
 # SECTION 5 — LIVE WEATHER (OpenWeather API)
 # ════════════════════════════════════════════════════════════
