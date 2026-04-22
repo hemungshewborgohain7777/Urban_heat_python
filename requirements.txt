@@ -9,3 +9,4 @@ earthengine-api
 requests
 folium
 mapclassify
+fiona
